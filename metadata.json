@@ -1,0 +1,5 @@
+{
+  "name": "AI Elevator Technician",
+  "description": "An AI-powered application to diagnose elevator problems by analyzing technical documents and user-provided descriptions of the issues.",
+  "requestFramePermissions": []
+}
