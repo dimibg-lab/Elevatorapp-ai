@@ -28,13 +28,34 @@
     from { opacity: 0; transform: translateY(10px); }
     to { opacity: 1; transform: translateY(0); }
   }
+  @keyframes slide-in-right {
+    from { opacity: 0; transform: translateX(20px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  @keyframes slide-in-left {
+    from { opacity: 0; transform: translateX(-20px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  @keyframes pulse-bg {
+    0%, 100% { background-color: #334155; } /* slate-700 */
+    50% { background-color: #475569; } /* slate-600 */
+  }
+
   .animate-fade-in {
     animation: fade-in 0.3s ease-out forwards;
   }
-  /* Start hidden before animation, fill mode takes care of the end state */
   .animate-slide-in-up {
     animation: slide-in-up 0.3s ease-out forwards;
     opacity: 0; 
+  }
+  .animate-slide-in-right {
+    animation: slide-in-right 0.4s ease-out forwards;
+  }
+  .animate-slide-in-left {
+    animation: slide-in-left 0.4s ease-out forwards;
+  }
+  .animate-pulse-bg {
+    animation: pulse-bg 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   }
 </style>
 </head>

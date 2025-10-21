@@ -1,7 +1,9 @@
 
+
 import { useState, useEffect, useCallback } from 'react';
 
 export interface Message {
+  id: string;
   role: 'user' | 'model';
   content: string;
   sources?: { uri: string; title: string }[];
@@ -19,6 +21,47 @@ export const useChatHistory = () => {
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
 
   useEffect(() => {
+    // 1. Check for a shared chat in the URL hash first
+    const hash = window.location.hash;
+    if (hash.startsWith('#share=')) {
+      try {
+        const encodedData = hash.substring('#share='.length);
+        const jsonString = decodeURIComponent(escape(atob(encodedData)));
+        const sharedChatData = JSON.parse(jsonString);
+
+        if (sharedChatData.title && Array.isArray(sharedChatData.messages)) {
+          const newChatId = `chat-${Date.now()}`;
+          const importedChat: Chat = {
+            id: newChatId,
+            title: `Споделено: ${sharedChatData.title}`,
+            messages: sharedChatData.messages.map((msg: Omit<Message, 'id'>, index: number) => ({
+              ...msg,
+              id: `${msg.role}-${Date.now()}-${index}`, // Re-generate unique IDs
+            })),
+          };
+
+          let existingChats: Chat[] = [];
+          const savedState = localStorage.getItem('chatState');
+          if (savedState) {
+            const { chats: savedChats } = JSON.parse(savedState);
+            if (Array.isArray(savedChats)) {
+                existingChats = savedChats;
+            }
+          }
+
+          const newChats = [importedChat, ...existingChats];
+          setChats(newChats);
+          setCurrentChatId(newChatId);
+
+          window.history.replaceState(null, '', window.location.pathname + window.location.search);
+          return; 
+        }
+      } catch (error) {
+        console.error("Failed to load shared chat from URL", error);
+      }
+    }
+    
+    // 2. If no shared chat, load from localStorage
     try {
       const savedState = localStorage.getItem('chatState');
       if (savedState) {
@@ -34,7 +77,7 @@ export const useChatHistory = () => {
       localStorage.removeItem('chatState');
     }
 
-    // If nothing loaded, create a new chat
+    // 3. If nothing loaded, create a new chat
     const newChatId = `chat-${Date.now()}`;
     setChats([{ id: newChatId, title: "Нов чат", messages: [] }]);
     setCurrentChatId(newChatId);
@@ -48,7 +91,7 @@ export const useChatHistory = () => {
       } catch (error) {
         console.error("Failed to save chat history to localStorage", error);
       }
-    } else {
+    } else if (localStorage.getItem('chatState')) { // Clear storage if all chats are deleted
       localStorage.removeItem('chatState');
     }
   }, [chats, currentChatId]);

@@ -4,7 +4,7 @@ import React, { useState, useCallback, useRef, useEffect, useLayoutEffect } from
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { getChatResponseStream } from './services/geminiService.ts';
-import { PaperAirplaneIcon, SpinnerIcon, ExclamationTriangleIcon, UserIcon, RobotIcon, LinkIcon, PaperClipIcon, Bars3Icon, MicrophoneIcon } from './components/Icons.tsx';
+import { PaperAirplaneIcon, SpinnerIcon, ExclamationTriangleIcon, UserIcon, RobotIcon, LinkIcon, PaperClipIcon, Bars3Icon, MicrophoneIcon, ShareIcon, CheckIcon } from './components/Icons.tsx';
 import FileAttachments from './components/FileAttachments.tsx';
 import ChatHistorySidebar from './components/ChatHistorySidebar.tsx';
 import { useChatHistory, Message, Chat } from './hooks/useChatHistory.ts';
@@ -16,6 +16,7 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [appError, setAppError] = useState<string>('');
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
+  const [linkCopied, setLinkCopied] = useState(false);
   
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -88,7 +89,7 @@ const App: React.FC = () => {
     }
 
     const userMessageContent = question.trim() || `Анализирай прикачените ${filesForUpload.length} файла.`;
-    const userMessage: Message = { role: 'user', content: userMessageContent };
+    const userMessage: Message = { id: `user-${Date.now()}`, role: 'user', content: userMessageContent };
     
     const filesToSend = [...filesForUpload];
     const questionToAsk = question;
@@ -100,9 +101,19 @@ const App: React.FC = () => {
 
         const isNewChat = chatToUpdate.messages.length === 0;
         let newTitle = chatToUpdate.title;
-        if (isNewChat && question.trim()) {
-            newTitle = question.trim().split(' ').slice(0, 5).join(' ');
-            if (question.trim().length > newTitle.length) newTitle += '...';
+        
+        if (isNewChat) {
+            const questionText = question.trim();
+            if (questionText) {
+                const words = questionText.split(/\s+/);
+                newTitle = words.slice(0, 5).join(' ');
+                if (words.length > 5) {
+                    newTitle += '...';
+                }
+            } else if (filesForUpload.length > 0) {
+                const fileCount = filesForUpload.length;
+                newTitle = `Анализ на ${fileCount} файл${fileCount > 1 ? 'а' : ''}`;
+            }
         }
 
         return prev.map(chat => 
@@ -117,7 +128,7 @@ const App: React.FC = () => {
     setIsLoading(true);
     setAppError('');
 
-    const modelMessagePlaceholder: Message = { role: 'model', content: '', sources: [], isLoading: true };
+    const modelMessagePlaceholder: Message = { id: `model-${Date.now()}`, role: 'model', content: '', sources: [], isLoading: true };
     setChats(prev => prev.map(chat => 
         chat.id === currentChatId 
           ? { ...chat, messages: [...chat.messages, modelMessagePlaceholder] } 
@@ -183,6 +194,35 @@ const App: React.FC = () => {
     setAppError('');
   };
 
+  const handleShareChat = useCallback(async () => {
+    if (!currentChat) return;
+    setAppError('');
+
+    const shareableData = {
+      title: currentChat.title,
+      messages: currentChat.messages.map(({ role, content }) => ({ role, content })),
+    };
+
+    try {
+      const jsonString = JSON.stringify(shareableData);
+      const encodedData = btoa(unescape(encodeURIComponent(jsonString)));
+      const shareUrl = `${window.location.origin}${window.location.pathname}#share=${encodedData}`;
+
+      if (shareUrl.length > 8000) { // Set a generous limit to avoid browser issues
+        setAppError("Разговорът е твърде дълъг за споделяне чрез връзка.");
+        return;
+      }
+
+      await navigator.clipboard.writeText(shareUrl);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2500);
+    } catch (error) {
+      console.error("Failed to create share link:", error);
+      setAppError("Неуспешно създаване на връзка за споделяне.");
+    }
+  }, [currentChat]);
+
+
   const isSendDisabled = (!currentQuestion.trim() && filesForUpload.length === 0) || isLoading;
 
   const exampleQuestions = [
@@ -228,6 +268,28 @@ const App: React.FC = () => {
                 </button>
                 <h2 className="text-xl font-semibold text-sky-400">Чат</h2>
              </div>
+             <div className="flex items-center gap-2">
+                {currentChat && currentChat.messages.length > 0 && (
+                    <button
+                        onClick={handleShareChat}
+                        className={`flex items-center gap-2 p-2 rounded-md text-slate-400 hover:bg-slate-700/50 transition-all duration-200 ${linkCopied ? 'text-green-400' : 'hover:text-sky-400'}`}
+                        aria-label="Сподели чата"
+                        title="Сподели чата"
+                    >
+                        {linkCopied ? (
+                            <>
+                                <CheckIcon className="w-5 h-5" />
+                                <span className="text-sm hidden sm:inline">Копирано!</span>
+                            </>
+                        ) : (
+                            <>
+                                <ShareIcon className="w-5 h-5" />
+                                <span className="text-sm hidden sm:inline">Сподели</span>
+                            </>
+                        )}
+                    </button>
+                )}
+            </div>
           </header>
 
           <main className="flex-grow flex flex-col space-y-4 overflow-hidden">
@@ -254,10 +316,10 @@ const App: React.FC = () => {
                         </div>
                     </div>
                 )}
-                {messages.map((msg, index) => (
-                  <div key={index} className={`flex items-start gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                {messages.map((msg) => (
+                  <div key={msg.id} className={`flex items-start gap-3 ${msg.role === 'user' ? 'justify-end animate-slide-in-right' : 'justify-start animate-slide-in-left'}`}>
                     {msg.role === 'model' && (
-                      <div className={`flex-shrink-0 w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center ${msg.isLoading ? 'animate-pulse' : ''}`}>
+                      <div className={`flex-shrink-0 w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center ${msg.isLoading ? 'animate-pulse-bg' : ''}`}>
                         <RobotIcon className="w-5 h-5 text-sky-400" />
                       </div>
                     )}
@@ -265,9 +327,9 @@ const App: React.FC = () => {
                       {msg.role === 'model' ? (
                         <>
                           {msg.isLoading && !msg.content && (
-                            <div className="flex items-center">
+                            <div className="flex items-center space-x-2">
                               <SpinnerIcon className="w-5 h-5 text-slate-300 animate-spin" />
-                              <span className="ml-2 text-slate-300">AI мисли...</span>
+                              <span className="text-slate-300">AI мисли...</span>
                             </div>
                           )}
                           {msg.content && (
@@ -303,7 +365,7 @@ const App: React.FC = () => {
                         <p className="whitespace-pre-wrap">{msg.content}</p>
                       )}
                       {msg.sources && msg.sources.length > 0 && !msg.isLoading && (
-                        <div className="mt-4 pt-3 border-t border-slate-600/50">
+                        <div className="mt-4 pt-3 border-t border-slate-600/50 animate-fade-in">
                           <h4 className="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">Източници:</h4>
                           <div className="flex flex-col space-y-2">
                             {msg.sources.map((source, i) => (
@@ -342,7 +404,7 @@ const App: React.FC = () => {
           </main>
           
           <footer className="mt-auto pt-4 flex-shrink-0">
-            <div className="relative bg-slate-800/50 rounded-lg shadow-lg border border-slate-700 p-2">
+            <div className="relative bg-slate-800/50 rounded-lg shadow-lg border border-slate-700 p-2 focus-within:border-sky-500 transition-colors">
               <FileAttachments files={filesForUpload} onRemoveFile={handleRemoveFile} />
               <div className="flex items-start">
                   <label
