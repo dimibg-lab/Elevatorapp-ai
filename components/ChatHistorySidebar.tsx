@@ -1,6 +1,6 @@
 
-import React from 'react';
-import { PlusIcon, WrenchIcon, XMarkIcon, TrashIcon } from './Icons.tsx';
+import React, { useState, useEffect, useRef } from 'react';
+import { PlusIcon, WrenchIcon, XMarkIcon, TrashIcon, PencilIcon } from './Icons.tsx';
 
 interface Chat {
   id: string;
@@ -15,9 +15,46 @@ interface ChatHistorySidebarProps {
   onNewChat: () => void;
   onSelectChat: (id: string) => void;
   onDeleteChat: (id: string) => void;
+  onRenameChat: (id: string, newTitle: string) => void;
 }
 
-const ChatHistorySidebar: React.FC<ChatHistorySidebarProps> = ({ chats, currentChatId, isOpen, onClose, onNewChat, onSelectChat, onDeleteChat }) => {
+const ChatHistorySidebar: React.FC<ChatHistorySidebarProps> = ({ chats, currentChatId, isOpen, onClose, onNewChat, onSelectChat, onDeleteChat, onRenameChat }) => {
+  const [editingChatId, setEditingChatId] = useState<string | null>(null);
+  const [editedTitle, setEditedTitle] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editingChatId && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editingChatId]);
+
+  const handleStartEditing = (chat: Chat) => {
+    setEditingChatId(chat.id);
+    setEditedTitle(chat.title);
+  };
+
+  const handleCancelEditing = () => {
+    setEditingChatId(null);
+    setEditedTitle('');
+  };
+
+  const handleSaveRename = () => {
+    if (editingChatId && editedTitle.trim()) {
+      onRenameChat(editingChatId, editedTitle.trim());
+    }
+    handleCancelEditing();
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      handleSaveRename();
+    } else if (e.key === 'Escape') {
+      handleCancelEditing();
+    }
+  };
+
   return (
     <>
       {/* Overlay for mobile */}
@@ -58,28 +95,48 @@ const ChatHistorySidebar: React.FC<ChatHistorySidebarProps> = ({ chats, currentC
             <ul className="space-y-1">
                 {chats.map(chat => (
                 <li key={chat.id} className="group relative">
-                    <a
-                    href="#"
-                    onClick={(e) => { e.preventDefault(); onSelectChat(chat.id); }}
-                    className={`block w-full text-left p-2 rounded-md text-sm truncate transition-colors pr-8 ${
-                        currentChatId === chat.id
-                        ? 'bg-slate-700/80 text-white font-semibold'
-                        : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
-                    }`}
-                    title={chat.title}
-                    >
-                    {chat.title}
-                    </a>
-                    <button
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            onDeleteChat(chat.id);
-                        }}
-                        className="absolute right-1 top-1/2 -translate-y-1/2 p-1 text-slate-500 hover:text-red-400 rounded-md opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100"
-                        aria-label={`Изтрий чат "${chat.title}"`}
-                    >
-                        <TrashIcon className="w-4 h-4" />
-                    </button>
+                    {editingChatId === chat.id ? (
+                      <input
+                        ref={inputRef}
+                        type="text"
+                        value={editedTitle}
+                        onChange={(e) => setEditedTitle(e.target.value)}
+                        onBlur={handleSaveRename}
+                        onKeyDown={handleKeyDown}
+                        className="w-full text-sm p-2 rounded-md bg-slate-600 text-white outline-none focus:ring-2 focus:ring-sky-500"
+                      />
+                    ) : (
+                      <>
+                        <a
+                        href="#"
+                        onClick={(e) => { e.preventDefault(); onSelectChat(chat.id); }}
+                        className={`block w-full text-left p-2 rounded-md text-sm truncate transition-colors ${
+                            currentChatId === chat.id
+                            ? 'bg-slate-700/80 text-white font-semibold'
+                            : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
+                        }`}
+                        title={chat.title}
+                        >
+                        {chat.title}
+                        </a>
+                        <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center bg-slate-700/80 group-hover:bg-slate-700 rounded-md opacity-0 group-hover:opacity-100 transition-opacity focus-within:opacity-100">
+                            <button
+                                onClick={(e) => { e.stopPropagation(); handleStartEditing(chat); }}
+                                className="p-1 text-slate-400 hover:text-sky-400"
+                                aria-label={`Преименувай чат "${chat.title}"`}
+                            >
+                                <PencilIcon className="w-4 h-4" />
+                            </button>
+                            <button
+                                onClick={(e) => { e.stopPropagation(); onDeleteChat(chat.id); }}
+                                className="p-1 text-slate-400 hover:text-red-400"
+                                aria-label={`Изтрий чат "${chat.title}"`}
+                            >
+                                <TrashIcon className="w-4 h-4" />
+                            </button>
+                        </div>
+                      </>
+                    )}
                 </li>
                 ))}
             </ul>

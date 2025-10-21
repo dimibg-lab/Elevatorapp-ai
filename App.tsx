@@ -1,69 +1,51 @@
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { getChatResponse } from './services/geminiService.ts';
-import { PaperAirplaneIcon, SpinnerIcon, ExclamationTriangleIcon, UserIcon, RobotIcon, LinkIcon, PaperClipIcon, Bars3Icon } from './components/Icons.tsx';
+
+import React, { useState, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { getChatResponseStream } from './services/geminiService.ts';
+import { PaperAirplaneIcon, SpinnerIcon, ExclamationTriangleIcon, UserIcon, RobotIcon, LinkIcon, PaperClipIcon, Bars3Icon, MicrophoneIcon } from './components/Icons.tsx';
 import FileAttachments from './components/FileAttachments.tsx';
 import ChatHistorySidebar from './components/ChatHistorySidebar.tsx';
-
-interface Message {
-  role: 'user' | 'model';
-  content: string;
-  sources?: { uri: string; title: string }[];
-}
-
-interface Chat {
-  id: string;
-  title: string;
-  messages: Message[];
-}
+import { useChatHistory, Message, Chat } from './hooks/useChatHistory.ts';
+import { useSpeechRecognition } from './hooks/useSpeechRecognition.ts';
 
 const App: React.FC = () => {
   const [filesForUpload, setFilesForUpload] = useState<File[]>([]);
-  const [chats, setChats] = useState<Chat[]>([]);
-  const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [currentQuestion, setCurrentQuestion] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [appError, setAppError] = useState<string>('');
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
-  const [error, setError] = useState<string>('');
-  const chatContainerRef = useRef<HTMLDivElement>(null);
   
-  const currentChat = chats.find(chat => chat.id === currentChatId);
-  const messages = currentChat?.messages ?? [];
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => {
-    try {
-      const savedState = localStorage.getItem('chatState');
-      if (savedState) {
-        const { chats: savedChats, currentChatId: savedChatId } = JSON.parse(savedState);
-        if (Array.isArray(savedChats) && savedChats.length > 0 && savedChatId) {
-          setChats(savedChats);
-          setCurrentChatId(savedChatId);
-          return;
-        }
-      }
-    } catch (error) {
-      console.error("Failed to load chat history from localStorage", error);
-      localStorage.removeItem('chatState');
-    }
+  const {
+    chats,
+    currentChat,
+    currentChatId,
+    setCurrentChatId,
+    createNewChat,
+    deleteChat,
+    renameChat,
+    setChats,
+  } = useChatHistory();
 
-    // If nothing loaded, create a new chat
-    const newChatId = `chat-${Date.now()}`;
-    setChats([{ id: newChatId, title: "Нов чат", messages: [] }]);
-    setCurrentChatId(newChatId);
+  const handleTranscript = useCallback((transcript: string) => {
+      setCurrentQuestion(prev => prev.trim() + (prev.trim() ? ' ' : '') + transcript);
   }, []);
 
+  const { isListening, error: speechError, toggleListening, isSupported: speechIsSupported } = useSpeechRecognition({
+      onTranscript: handleTranscript,
+  });
+
   useEffect(() => {
-    if (chats.length > 0 && currentChatId) {
-      try {
-        const stateToSave = JSON.stringify({ chats, currentChatId });
-        localStorage.setItem('chatState', stateToSave);
-      } catch (error) {
-        console.error("Failed to save chat history to localStorage", error);
-      }
-    } else {
-      localStorage.removeItem('chatState');
+    if (speechError) {
+      setAppError(speechError);
     }
-  }, [chats, currentChatId]);
+  }, [speechError]);
+  
+  const messages = currentChat?.messages ?? [];
 
   useEffect(() => {
     if (chatContainerRef.current) {
@@ -71,13 +53,24 @@ const App: React.FC = () => {
     }
   }, [messages, isLoading]);
 
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+      textarea.style.height = 'auto'; // Reset height to recalculate
+      const scrollHeight = textarea.scrollHeight;
+      const maxHeight = 200; // Max height for textarea in pixels
+      textarea.style.height = `${Math.min(scrollHeight, maxHeight)}px`;
+    }
+  }, [currentQuestion]);
+
+
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files) {
       const newFiles = Array.from(event.target.files);
       const combined = [...filesForUpload, ...newFiles];
       const uniqueFiles = Array.from(new Map(combined.map(item => [item.name, item])).values());
       setFilesForUpload(uniqueFiles);
-      setError('');
+      setAppError('');
     }
   };
   
@@ -90,79 +83,104 @@ const App: React.FC = () => {
     if (!question.trim() && filesForUpload.length === 0) return;
     if (!currentChatId) return;
 
-    const userMessageContent = question.trim() || `Анализирай прикачените ${filesForUpload.length} файла.`;
-    const userMessage: Message = { role: 'user', content: userMessageContent };
-    
-    let newTitle = currentChat?.title ?? "Нов чат";
-    const isNewChat = currentChat?.messages.length === 0;
-
-    if (isNewChat && question.trim()) {
-        newTitle = question.trim().split(' ').slice(0, 5).join(' ');
-        if (question.trim().length > newTitle.length) newTitle += '...';
+    if (isListening) {
+      toggleListening();
     }
 
-    setChats(prev => prev.map(chat => 
-      chat.id === currentChatId 
-        ? { ...chat, title: newTitle, messages: [...chat.messages, userMessage] } 
-        : chat
-    ));
+    const userMessageContent = question.trim() || `Анализирай прикачените ${filesForUpload.length} файла.`;
+    const userMessage: Message = { role: 'user', content: userMessageContent };
     
     const filesToSend = [...filesForUpload];
     const questionToAsk = question;
 
+    // Use functional updates to avoid dependency on 'chats' or 'currentChat'
+    setChats(prev => {
+        const chatToUpdate = prev.find(c => c.id === currentChatId);
+        if (!chatToUpdate) return prev;
+
+        const isNewChat = chatToUpdate.messages.length === 0;
+        let newTitle = chatToUpdate.title;
+        if (isNewChat && question.trim()) {
+            newTitle = question.trim().split(' ').slice(0, 5).join(' ');
+            if (question.trim().length > newTitle.length) newTitle += '...';
+        }
+
+        return prev.map(chat => 
+          chat.id === currentChatId 
+            ? { ...chat, title: newTitle, messages: [...chat.messages, userMessage] } 
+            : chat
+        );
+    });
+    
     setCurrentQuestion('');
     setFilesForUpload([]);
     setIsLoading(true);
-    setError('');
+    setAppError('');
 
-    try {
-      const result = await getChatResponse(filesToSend, questionToAsk);
-      const modelMessage: Message = { role: 'model', content: result.text, sources: result.sources };
-      setChats(prev => prev.map(chat => 
+    const modelMessagePlaceholder: Message = { role: 'model', content: '', sources: [], isLoading: true };
+    setChats(prev => prev.map(chat => 
         chat.id === currentChatId 
-          ? { ...chat, messages: [...chat.messages, modelMessage] } 
+          ? { ...chat, messages: [...chat.messages, modelMessagePlaceholder] } 
           : chat
       ));
+    
+    textareaRef.current?.focus();
+
+    try {
+      const stream = getChatResponseStream(filesToSend, questionToAsk);
+      let finalSources: { uri: string; title: string }[] = [];
+
+      for await (const chunk of stream) {
+        if (chunk.textChunk) {
+          setChats(prev => prev.map(chat => {
+            if (chat.id !== currentChatId) return chat;
+            const updatedMessages = [...chat.messages];
+            const lastMessage = updatedMessages[updatedMessages.length - 1];
+            if (lastMessage && lastMessage.role === 'model') {
+                lastMessage.content += chunk.textChunk;
+            }
+            return { ...chat, messages: updatedMessages };
+          }));
+        }
+        if (chunk.isFinal && chunk.sources) {
+          finalSources = chunk.sources;
+        }
+      }
+      
+      setChats(prev => prev.map(chat => {
+        if (chat.id !== currentChatId) return chat;
+        const updatedMessages = [...chat.messages];
+        const lastMessage = updatedMessages[updatedMessages.length - 1];
+        if (lastMessage && lastMessage.role === 'model') {
+            lastMessage.isLoading = false;
+            lastMessage.sources = finalSources;
+        }
+        return { ...chat, messages: updatedMessages };
+      }));
+
     } catch (err) {
       if (err instanceof Error) {
-        setError(`Възникна грешка: ${err.message}`);
+        setAppError(`Възникна грешка: ${err.message}`);
       } else {
-        setError('Възникна неочаквана грешка.');
+        setAppError('Възникна неочаквана грешка.');
       }
       setChats(prev => prev.map(chat => 
         chat.id === currentChatId 
-          ? { ...chat, messages: chat.messages.slice(0, -1) } // Remove optimistic user message
+          ? { ...chat, messages: chat.messages.slice(0, -2) } 
           : chat
       ));
-      setCurrentQuestion(questionToAsk); // Restore user question
-      setFilesForUpload(filesToSend); // Restore files
+      setCurrentQuestion(questionToAsk);
+      setFilesForUpload(filesToSend);
     } finally {
       setIsLoading(false);
     }
-  }, [filesForUpload, currentQuestion, chats, currentChatId]);
+  }, [currentChatId, currentQuestion, filesForUpload, isListening, setChats, toggleListening]);
   
   const handleNewChat = () => {
-    const newChatId = `chat-${Date.now()}`;
-    const newChat: Chat = { id: newChatId, title: "Нов чат", messages: [] };
-    setChats(prev => [newChat, ...prev]);
-    setCurrentChatId(newChatId);
+    createNewChat();
     setCurrentQuestion('');
     setFilesForUpload([]);
-    setError('');
-  };
-
-  const handleDeleteChat = (chatIdToDelete: string) => {
-    const remainingChats = chats.filter(chat => chat.id !== chatIdToDelete);
-    
-    if (currentChatId === chatIdToDelete) {
-        if (remainingChats.length > 0) {
-            setCurrentChatId(remainingChats[0].id);
-        } else {
-            handleNewChat(); // This will create a new chat and set it as current
-            return; // Exit early as handleNewChat modifies the chats state
-        }
-    }
-    setChats(remainingChats);
+    setAppError('');
   };
 
   const isSendDisabled = (!currentQuestion.trim() && filesForUpload.length === 0) || isLoading;
@@ -176,6 +194,7 @@ const App: React.FC = () => {
 
   const handleExampleQuestionClick = (question: string) => {
       setCurrentQuestion(question);
+      textareaRef.current?.focus();
   };
 
   return (
@@ -193,7 +212,8 @@ const App: React.FC = () => {
           setCurrentChatId(id);
           setIsSidebarOpen(false);
         }}
-        onDeleteChat={handleDeleteChat}
+        onDeleteChat={deleteChat}
+        onRenameChat={renameChat}
       />
       <div className="flex-grow flex flex-col h-screen">
         <div className="w-full max-w-3xl mx-auto flex flex-col h-full p-4 sm:p-6">
@@ -237,13 +257,52 @@ const App: React.FC = () => {
                 {messages.map((msg, index) => (
                   <div key={index} className={`flex items-start gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                     {msg.role === 'model' && (
-                      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center">
+                      <div className={`flex-shrink-0 w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center ${msg.isLoading ? 'animate-pulse' : ''}`}>
                         <RobotIcon className="w-5 h-5 text-sky-400" />
                       </div>
                     )}
                     <div className={`max-w-xl p-3.5 rounded-lg shadow ${msg.role === 'user' ? 'bg-sky-600 text-white rounded-br-none' : 'bg-slate-700/80 rounded-bl-none'}`}>
-                      <p className="whitespace-pre-wrap">{msg.content}</p>
-                      {msg.sources && msg.sources.length > 0 && (
+                      {msg.role === 'model' ? (
+                        <>
+                          {msg.isLoading && !msg.content && (
+                            <div className="flex items-center">
+                              <SpinnerIcon className="w-5 h-5 text-slate-300 animate-spin" />
+                              <span className="ml-2 text-slate-300">AI мисли...</span>
+                            </div>
+                          )}
+                          {msg.content && (
+                             <ReactMarkdown
+                              remarkPlugins={[remarkGfm]}
+                              className="prose prose-sm prose-slate prose-invert max-w-none 
+                                prose-p:leading-relaxed prose-p:text-slate-300 
+                                prose-headings:text-slate-100 prose-headings:font-semibold 
+                                prose-h1:text-xl prose-h1:mb-4 prose-h1:mt-6 
+                                prose-h2:text-lg prose-h2:mb-3 prose-h2:mt-5 prose-h2:pb-2 prose-h2:border-b prose-h2:border-slate-700 
+                                prose-h3:text-base prose-h3:mb-2 prose-h3:mt-4 
+                                prose-a:text-sky-400 prose-a:font-medium prose-a:no-underline hover:prose-a:underline 
+                                prose-ul:list-disc prose-ul:pl-5 prose-ul:my-3 
+                                prose-ol:list-decimal prose-ol:pl-5 prose-ol:my-3 
+                                prose-li:my-1.5 prose-li:marker:text-slate-500 
+                                prose-blockquote:not-italic prose-blockquote:pl-4 prose-blockquote:border-l-4 prose-blockquote:border-yellow-500 prose-blockquote:bg-yellow-900/20 prose-blockquote:text-yellow-200 prose-blockquote:my-4 prose-blockquote:rounded-r-md 
+                                prose-code:bg-slate-800 prose-code:rounded prose-code:px-1.5 prose-code:py-1 prose-code:text-sky-300 prose-code:font-mono prose-code:text-xs prose-code:before:content-[''] prose-code:after:content-[''] 
+                                prose-pre:bg-slate-800 prose-pre:p-3 prose-pre:rounded-md prose-pre:border prose-pre:border-slate-700 
+                                prose-strong:text-slate-100 
+                                prose-hr:border-slate-700 prose-hr:my-6 
+                                prose-table:w-full prose-table:my-4 prose-table:border-collapse 
+                                prose-thead:border-b prose-thead:border-slate-600 
+                                prose-th:px-4 prose-th:py-2 prose-th:text-left prose-th:font-semibold prose-th:text-slate-200 
+                                prose-tbody:divide-y prose-tbody:divide-slate-700 
+                                prose-tr:border-b prose-tr:border-slate-700 
+                                prose-td:px-4 prose-td:py-2"
+                            >
+                              {msg.content + (msg.isLoading ? '▍' : '')}
+                            </ReactMarkdown>
+                          )}
+                        </>
+                      ) : (
+                        <p className="whitespace-pre-wrap">{msg.content}</p>
+                      )}
+                      {msg.sources && msg.sources.length > 0 && !msg.isLoading && (
                         <div className="mt-4 pt-3 border-t border-slate-600/50">
                           <h4 className="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">Източници:</h4>
                           <div className="flex flex-col space-y-2">
@@ -270,23 +329,12 @@ const App: React.FC = () => {
                     )}
                   </div>
                 ))}
-                 {isLoading && (
-                  <div className="flex items-start gap-3 justify-start">
-                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center">
-                      <RobotIcon className="w-5 h-5 text-sky-400" />
-                    </div>
-                    <div className="max-w-xl p-3.5 rounded-lg shadow bg-slate-700/80 rounded-bl-none flex items-center">
-                      <SpinnerIcon className="w-5 h-5 text-slate-300 animate-spin" />
-                      <span className="ml-2 text-slate-300">AI мисли...</span>
-                    </div>
-                  </div>
-                )}
               </div>
-               {error && (
+               {appError && (
                 <div className="p-4 border-t border-slate-700 flex-shrink-0">
                   <div className="bg-red-900/50 text-red-300 border border-red-800 rounded-lg p-3 flex items-center gap-3">
                     <ExclamationTriangleIcon className="w-5 h-5 flex-shrink-0" />
-                    <p className="text-sm">{error}</p>
+                    <p className="text-sm">{appError}</p>
                   </div>
                 </div>
               )}
@@ -296,14 +344,7 @@ const App: React.FC = () => {
           <footer className="mt-auto pt-4 flex-shrink-0">
             <div className="relative bg-slate-800/50 rounded-lg shadow-lg border border-slate-700 p-2">
               <FileAttachments files={filesForUpload} onRemoveFile={handleRemoveFile} />
-              <div className="flex items-center">
-                  <input
-                      type="file"
-                      multiple
-                      onChange={handleFileChange}
-                      id="file-upload"
-                      className="hidden"
-                  />
+              <div className="flex items-start">
                   <label
                       htmlFor="file-upload"
                       className="p-3 rounded-md text-slate-400 hover:text-sky-400 hover:bg-slate-700/50 transition-colors cursor-pointer"
@@ -312,7 +353,25 @@ const App: React.FC = () => {
                   >
                       <PaperClipIcon className="w-6 h-6" />
                   </label>
+                  <input
+                      type="file"
+                      multiple
+                      onChange={handleFileChange}
+                      id="file-upload"
+                      className="hidden"
+                  />
+                  {speechIsSupported && (
+                    <button
+                      onClick={toggleListening}
+                      className={`p-3 rounded-md transition-colors ${isListening ? 'text-red-500 hover:bg-red-900/50' : 'text-slate-400 hover:text-sky-400 hover:bg-slate-700/50'}`}
+                      aria-label={isListening ? 'Спри гласовото въвеждане' : 'Започни гласово въвеждане'}
+                      title={isListening ? 'Спри гласовото въвеждане' : 'Гласово въвеждане'}
+                    >
+                      <MicrophoneIcon className="w-6 h-6" />
+                    </button>
+                  )}
                   <textarea
+                      ref={textareaRef}
                       value={currentQuestion}
                       onChange={(e) => setCurrentQuestion(e.target.value)}
                       onKeyDown={(e) => {
@@ -324,13 +383,13 @@ const App: React.FC = () => {
                         }
                       }}
                       placeholder="Задайте въпрос или опишете проблема..."
-                      className="w-full h-12 bg-transparent text-slate-200 placeholder-slate-500 resize-none focus:outline-none px-3"
+                      className="w-full bg-transparent text-slate-200 placeholder-slate-500 resize-none focus:outline-none px-3 py-3 leading-tight"
                       rows={1}
                   />
                   <button
                       onClick={() => handleSendMessage()}
                       disabled={isSendDisabled}
-                      className="p-3 rounded-md text-slate-200 bg-sky-600 hover:bg-sky-500 disabled:bg-slate-600 disabled:text-slate-400 transition-colors disabled:cursor-not-allowed flex-shrink-0"
+                      className="p-3 self-end rounded-md text-slate-200 bg-sky-600 hover:bg-sky-500 disabled:bg-slate-600 disabled:text-slate-400 transition-colors disabled:cursor-not-allowed flex-shrink-0"
                       aria-label="Изпрати"
                   >
                       <PaperAirplaneIcon className="w-6 h-6" />

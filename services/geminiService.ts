@@ -16,12 +16,13 @@ const fileToBase64 = (file: File): Promise<string> => {
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
 
-interface ChatResponse {
-    text: string;
-    sources: { uri: string; title: string }[];
+export interface StreamedChatResponse {
+    textChunk?: string;
+    sources?: { uri: string; title: string }[];
+    isFinal: boolean;
 }
 
-export const getChatResponse = async (files: File[], question: string): Promise<ChatResponse> => {
+export async function* getChatResponseStream(files: File[], question: string): AsyncGenerator<StreamedChatResponse> {
     if (!process.env.API_KEY) {
         throw new Error("API_KEY environment variable is not set.");
     }
@@ -60,7 +61,7 @@ export const getChatResponse = async (files: File[], question: string): Promise<
     };
 
     try {
-        const response = await ai.models.generateContent({
+        const responseStream = await ai.models.generateContentStream({
             model: 'gemini-2.5-flash',
             contents: [{ parts: [...imageParts, textPart] }],
             config: {
@@ -68,22 +69,25 @@ export const getChatResponse = async (files: File[], question: string): Promise<
             },
         });
 
-        const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
-        
         const uniqueSources = new Map<string, { uri: string; title: string }>();
-        groundingChunks.forEach(chunk => {
-            if (chunk.web && chunk.web.uri) {
-                uniqueSources.set(chunk.web.uri, {
-                    uri: chunk.web.uri,
-                    title: chunk.web.title || chunk.web.uri
-                });
-            }
-        });
 
-        return {
-            text: response.text,
-            sources: Array.from(uniqueSources.values())
-        };
+        for await (const chunk of responseStream) {
+            if (chunk.text) {
+                yield { textChunk: chunk.text, isFinal: false };
+            }
+
+            const groundingChunks = chunk.candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
+            groundingChunks.forEach(gChunk => {
+                if (gChunk.web && gChunk.web.uri && !uniqueSources.has(gChunk.web.uri)) {
+                    uniqueSources.set(gChunk.web.uri, {
+                        uri: gChunk.web.uri,
+                        title: gChunk.web.title || gChunk.web.uri
+                    });
+                }
+            });
+        }
+        
+        yield { sources: Array.from(uniqueSources.values()), isFinal: true };
 
     } catch (error) {
         console.error("Error calling Gemini API:", error);
